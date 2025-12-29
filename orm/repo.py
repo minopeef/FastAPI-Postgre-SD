@@ -1,150 +1,221 @@
+# Repository pattern implementation for database operations
 import orm.modelos as modelos
 import orm.esquemas as esquemas
+import orm.utils as utils
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import select, and_
+from sqlalchemy.exc import IntegrityError
+from typing import List, Optional
+from fastapi import HTTPException, status
 
-# ------------ Peticiones a usuarios ---------------------
-# Esta función es llamada por api.py
-# para atender GET '/usuarios/{id}'
-# select * from app.usuarios where id = id_usuario
-def usuario_por_id(sesion:Session,id_usuario:int):
-    print("select * from app.usuarios where id = ", id_usuario)
-    return sesion.query(modelos.Usuario).filter(modelos.Usuario.id==id_usuario).first()
 
-# Buscar fotos por id de usuario
-# GET '/usuarios/{id}/fotos'
-# select * from app.fotos where id_usuario=id
-def fotos_por_id_usuario(sesion:Session,id_usuario:int):
-    print("select * from app.fotos where id_usuario=", id_usuario)
-    return sesion.query(modelos.Foto).filter(modelos.Foto.id_usuario==id_usuario).all() 
+# ============ User Operations ============
 
-# select * from app.compras where id_usuario=id
-def compras_por_id_usuario(sesion:Session,id_usuario:int):
-    print("select * from app.compras where id_usuario=", id_usuario)
-    return sesion.query(modelos.Compra).filter(modelos.Compra.id_usuario==id_usuario).all() 
+def usuario_por_id(sesion: Session, id_usuario: int) -> Optional[modelos.Usuario]:
+    """Get user by ID"""
+    stmt = select(modelos.Usuario).where(modelos.Usuario.id == id_usuario)
+    result = sesion.execute(stmt)
+    return result.scalar_one_or_none()
 
-# Borra fotos por id de usuario
-# DELETE '/usuarios/{id}/fotos'
-# delete from app.fotos where id_usuario=id
-def borrar_fotos_por_id_usuario(sesion:Session,id_usuario:int):
-    print("delete from app.fotos where id_usuario=",id_usuario)
-    fotos_usr = fotos_por_id_usuario(sesion, id_usuario)
-    if fotos_usr is not None:
-        for foto_usuario in fotos_usr:
-            sesion.delete(foto_usuario)
+
+def usuario_por_email(sesion: Session, email: str) -> Optional[modelos.Usuario]:
+    """Get user by email"""
+    stmt = select(modelos.Usuario).where(modelos.Usuario.email == email)
+    result = sesion.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+def devuelve_usuarios(sesion: Session, skip: int = 0, limit: int = 100) -> List[modelos.Usuario]:
+    """Get all users with pagination"""
+    stmt = select(modelos.Usuario).offset(skip).limit(limit)
+    result = sesion.execute(stmt)
+    return list(result.scalars().all())
+
+
+def guardar_usuario(sesion: Session, usr_nuevo: esquemas.UsuarioCreate) -> modelos.Usuario:
+    """Create a new user with hashed password"""
+    # Check if email already exists
+    existing = usuario_por_email(sesion, usr_nuevo.email)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+    
+    # Create new user with hashed password
+    usr_bd = modelos.Usuario(
+        nombre=usr_nuevo.nombre,
+        edad=usr_nuevo.edad,
+        domicilio=usr_nuevo.domicilio,
+        email=usr_nuevo.email,
+        password=utils.hash_password(usr_nuevo.password)
+    )
+    
+    try:
+        sesion.add(usr_bd)
         sesion.commit()
-
-# Borra compras por id de usuario
-# DELETE '/usuarios/{id}/compras'
-# delete from app.compras where id_usuario=id
-def borrar_compras_por_id_usuario(sesion:Session,id_usuario:int):
-    print("delete from app.compras where id_usuario=",id_usuario)
-    compras_usr = compras_por_id_usuario(sesion, id_usuario)
-    if compras_usr is not None:
-        for compra_usuario in compras_usr:
-            sesion.delete(compra_usuario)
-        sesion.commit()
-
-# GET '/usuarios'
-# select * from app.usuarios
-def devuelve_usuarios(sesion:Session):
-    print("select * from app.usuarios")
-    return sesion.query(modelos.Usuario).all()
-
-#POST '/usuarios'
-def guardar_usuario(sesion:Session, usr_nuevo:esquemas.UsuarioBase):
-    #1.- Crear un nuevo objeto de la clase modelo Usuario
-    usr_bd = modelos.Usuario()
-    #2.- Llenamos el nuevo objeto con los parámetros que nos paso el usuario
-    usr_bd.nombre = usr_nuevo.nombre
-    usr_bd.edad = usr_nuevo.edad
-    usr_bd.domicilio = usr_nuevo.domicilio
-    usr_bd.email = usr_nuevo.email
-    usr_bd.password = usr_nuevo.password
-    #3.- Insertar el nuevo objeto a la BD
-    sesion.add(usr_bd)
-    #4.- Confirmamos el cambio
-    sesion.commit()
-    #5.- Hacemos un refresh
-    sesion.refresh(usr_bd)
-    return usr_bd
-
-#PUT '/usuarios/{id}'
-# UPDATE app.usuarios
-# SET nombre=usr_esquema.nombre, edad=usr_esquema.edad, 
-# domicilio=usr_esquema.domicilio, email=usr_esquema.email,
-# password=usr_esquema.password
-# WHERE id = id_usuario
-def actualiza_usuario(sesion:Session,id_usuario:int,usr_esquema:esquemas.UsuarioBase):
-    #1.-Verificar que el usuario existe
-    usr_bd = usuario_por_id(sesion,id_usuario)
-    if usr_bd is not None:
-        #2.- Actualizamos los datos del usuaurio en la BD
-        usr_bd.nombre = usr_esquema.nombre
-        usr_bd.edad = usr_esquema.edad
-        usr_bd.domicilio = usr_esquema.domicilio
-        usr_bd.email = usr_esquema.email
-        usr_bd.password = usr_esquema.password
-        #3.-Confirmamos los cambios
-        sesion.commit()
-        #4.-Refrescar la BD
         sesion.refresh(usr_bd)
-        #5.-Imprimir los datos nuevos
-        print(usr_esquema)
-        return usr_esquema
-    else:
-        respuesta = {"mensaje":"No existe el usuario"}
-        return respuesta
+        return usr_bd
+    except IntegrityError:
+        sesion.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
 
-# DELETE '/usuarios/{id}'
-# delete from app.usuarios where id=id_usuario
-def borra_usuario_por_id(sesion:Session,id_usuario:int):
-    print("delete from app.usuarios where id=", id_usuario)
-    #1.- borro compras del usuario
-    borrar_compras_por_id_usuario(sesion, id_usuario)
-    #2.-borro foto del usuario
-    borrar_fotos_por_id_usuario(sesion, id_usuario)
-    #3.- select para ver si existe el usuario a borrar
-    usr = usuario_por_id(sesion, id_usuario)
-    #4.- Borramos
-    if usr is not None:
-        #Borramos usuario
-        sesion.delete(usr)
-        #Confirmar los cambios
+
+def actualiza_usuario(sesion: Session, id_usuario: int, usr_esquema: esquemas.UsuarioUpdate) -> modelos.Usuario:
+    """Update user information"""
+    usr_bd = usuario_por_id(sesion, id_usuario)
+    if not usr_bd:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Update only provided fields
+    update_data = usr_esquema.model_dump(exclude_unset=True)
+    
+    # Hash password if provided
+    if "password" in update_data:
+        update_data["password"] = utils.hash_password(update_data["password"])
+    
+    # Check email uniqueness if email is being updated
+    if "email" in update_data and update_data["email"] != usr_bd.email:
+        existing = usuario_por_email(sesion, update_data["email"])
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+    
+    for field, value in update_data.items():
+        setattr(usr_bd, field, value)
+    
+    try:
         sesion.commit()
-    respuesta = {
-        "mensaje": "usuario eliminado"
-    }
-    return respuesta
+        sesion.refresh(usr_bd)
+        return usr_bd
+    except IntegrityError:
+        sesion.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
 
-# ------------ Peticiones a fotos ---------------------
-# GET '/fotos/{id}'
-# select * from app.fotos where id = id_foto
-def foto_por_id(sesion:Session,id_foto:int):
-    print("select * from fotos where id = id_foto")
-    return sesion.query(modelos.Foto).filter(modelos.Foto.id==id_foto).first()
 
-# GET '/fotos'
-# select * from app.fotos
-def devuelve_fotos(sesion:Session):
-    print("select * from app.fotos")
-    return sesion.query(modelos.Foto).all()
+def borra_usuario_por_id(sesion: Session, id_usuario: int) -> dict:
+    """Delete user and all associated data (cascade handled by database)"""
+    usr = usuario_por_id(sesion, id_usuario)
+    if not usr:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    sesion.delete(usr)
+    sesion.commit()
+    return {"mensaje": "Usuario eliminado correctamente"}
 
-# ------------ Peticiones a compras ---------------------
-# GET '/compras/{id}'
-# select * from app.compras where id = id_compra
-def compra_por_id(sesion:Session,id_compra:int):
-    print("select * from compras where id = id_compra")
-    return sesion.query(modelos.Compra).filter(modelos.Compra.id==id_compra).first()
 
-# GET '/compras'
-# select * from app.compras
-def devuelve_compras(sesion:Session):
-    print("select * from app.compras")
-    return sesion.query(modelos.Compra).all()
+# ============ Photo Operations ============
 
-# GET '/compras?id_usuario={id_usr}&precio={p}'
-# select * from app.compras where id_usuario=id_usr and precio>=p
-def devuelve_compras_por_usuario_precio(sesion:Session, id_usr:int, p:float):
-    print("select * from app.compras where id_usuario=id_usr and precio>=p")
-    return sesion.query(modelos.Compra).filter(and_(modelos.Compra.id_usuario==id_usr, modelos.Compra.precio>=p)).all()
+def fotos_por_id_usuario(sesion: Session, id_usuario: int) -> List[modelos.Foto]:
+    """Get all photos for a user"""
+    stmt = select(modelos.Foto).where(modelos.Foto.id_usuario == id_usuario)
+    result = sesion.execute(stmt)
+    return list(result.scalars().all())
+
+
+def foto_por_id(sesion: Session, id_foto: int) -> Optional[modelos.Foto]:
+    """Get photo by ID"""
+    stmt = select(modelos.Foto).where(modelos.Foto.id == id_foto)
+    result = sesion.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+def devuelve_fotos(sesion: Session, skip: int = 0, limit: int = 100) -> List[modelos.Foto]:
+    """Get all photos with pagination"""
+    stmt = select(modelos.Foto).offset(skip).limit(limit)
+    result = sesion.execute(stmt)
+    return list(result.scalars().all())
+
+
+def guardar_foto(sesion: Session, foto_data: esquemas.FotoCreate, ruta: str) -> modelos.Foto:
+    """Save photo metadata to database"""
+    # Verify user exists
+    usuario = usuario_por_id(sesion, foto_data.id_usuario)
+    if not usuario:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    foto_bd = modelos.Foto(
+        id_usuario=foto_data.id_usuario,
+        titulo=foto_data.titulo,
+        descripcion=foto_data.descripcion,
+        ruta=ruta
+    )
+    
+    sesion.add(foto_bd)
+    sesion.commit()
+    sesion.refresh(foto_bd)
+    return foto_bd
+
+
+# ============ Purchase Operations ============
+
+def compras_por_id_usuario(sesion: Session, id_usuario: int) -> List[modelos.Compra]:
+    """Get all purchases for a user"""
+    stmt = select(modelos.Compra).where(modelos.Compra.id_usuario == id_usuario)
+    result = sesion.execute(stmt)
+    return list(result.scalars().all())
+
+
+def compra_por_id(sesion: Session, id_compra: int) -> Optional[modelos.Compra]:
+    """Get purchase by ID"""
+    stmt = select(modelos.Compra).where(modelos.Compra.id == id_compra)
+    result = sesion.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+def devuelve_compras(sesion: Session, skip: int = 0, limit: int = 100) -> List[modelos.Compra]:
+    """Get all purchases with pagination"""
+    stmt = select(modelos.Compra).offset(skip).limit(limit)
+    result = sesion.execute(stmt)
+    return list(result.scalars().all())
+
+
+def devuelve_compras_por_usuario_precio(sesion: Session, id_usr: int, precio_min: float) -> List[modelos.Compra]:
+    """Get purchases by user and minimum price"""
+    stmt = select(modelos.Compra).where(
+        and_(
+            modelos.Compra.id_usuario == id_usr,
+            modelos.Compra.precio >= precio_min
+        )
+    )
+    result = sesion.execute(stmt)
+    return list(result.scalars().all())
+
+
+def guardar_compra(sesion: Session, compra_data: esquemas.CompraCreate) -> modelos.Compra:
+    """Save a new purchase"""
+    # Verify user exists
+    usuario = usuario_por_id(sesion, compra_data.id_usuario)
+    if not usuario:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    compra_bd = modelos.Compra(
+        id_usuario=compra_data.id_usuario,
+        producto=compra_data.producto,
+        precio=compra_data.precio
+    )
+    
+    sesion.add(compra_bd)
+    sesion.commit()
+    sesion.refresh(compra_bd)
+    return compra_bd
