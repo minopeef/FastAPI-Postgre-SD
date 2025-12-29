@@ -1,33 +1,51 @@
-#El engine permite confirgurar la conexión a la BD
+# Database configuration and session management
 from sqlalchemy import create_engine
-#El session maker permite crear sesiones para hacer consultas
-#Por cada consulta se abre y cierra una sesión
-from sqlalchemy.orm import sessionmaker
-# importar el archivo de modelos 
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.pool import QueuePool
 from orm import modelos
 import os
+from typing import Generator
 
 
-#1. Configurar la conexion BD
-# Crear la URL de la BD -> servidorBD://usuario:password@url:puerto/nombreBD
-#URL_BASE_DATOS = "postgresql://usuario-ejemplo:12345@localhost:5432/base-ejemplo"
-# Conectarnos mediante el esquema app
-#engine = create_engine(URL_BASE_DATOS,
-#                       connect_args={
-#                           "options": "-csearch_path=app"                           
-#                       })
-#conecta a la base de datos
-engine = create_engine(os.getenv("db_uri", "sqlite://bd_ejemplo.db"))
+# Database connection configuration
+DATABASE_URI = os.getenv("db_uri", "sqlite:///bd_ejemplo.db")
+
+# Create engine with connection pooling for better performance
+if DATABASE_URI.startswith("sqlite"):
+    engine = create_engine(
+        DATABASE_URI,
+        connect_args={"check_same_thread": False},
+        echo=False
+    )
+else:
+    # PostgreSQL configuration with connection pooling
+    engine = create_engine(
+        DATABASE_URI,
+        poolclass=QueuePool,
+        pool_size=5,
+        max_overflow=10,
+        pool_pre_ping=True,  # Verify connections before using
+        echo=False
+    )
+
+# Create all tables
 modelos.BaseClass.metadata.create_all(engine)
 
-#2. Obtener la clase que nos permite crear objetos tipo session
-SessionClass = sessionmaker(engine) 
-# Crear una función para obtener objetos de la clase SessionClass
-def generador_sesion():
-    sesion = SessionClass()
+# Session factory
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def generador_sesion() -> Generator[Session, None, None]:
+    """
+    Dependency injection for database sessions.
+    Ensures proper session lifecycle management.
+    """
+    sesion = SessionLocal()
     try:
-        #equivalente a return sesion pero de manera segura
-        yield sesion 
+        yield sesion
+    except Exception:
+        sesion.rollback()
+        raise
     finally:
         sesion.close()
 
